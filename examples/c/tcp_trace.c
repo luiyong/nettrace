@@ -11,7 +11,7 @@
 
 static struct env {
 	pid_t pid;
-	bool lport;
+	__u16 lport;
 } env;
 
 static volatile bool exiting = false;
@@ -24,23 +24,18 @@ static void sig_handler(int sig)
 const char *argp_program_version = "tcp_trace 0.1";
 const char *argp_program_bug_address = "";
 const char argp_program_doc[] =
-"\nTrace TCP connects and show connection latency.\n"
+"\nTrace TCP.\n"
 "\n"
-"USAGE: tcpconnlat [--help] [-t] [-p PID] [-L]\n"
+"USAGE: tcp_trace [--help] [-t] [-p PID] [-l LPORT]\n"
 "\n"
 "EXAMPLES:\n"
-"    tcpconnlat              # summarize on-CPU time as a histogram\n"
-"    tcpconnlat 1            # trace connection latency slower than 1 ms\n"
-"    tcpconnlat 0.1          # trace connection latency slower than 100 us\n"
-"    tcpconnlat -t           # 1s summaries, milliseconds, and timestamps\n"
-"    tcpconnlat -p 185       # trace PID 185 only\n"
-"    tcpconnlat -L           # include LPORT while printing outputs\n";
+"    tcp_trace              # summarize on-CPU time as a histogram\n"
+"    tcp_trace -p 185       # trace PID 185 only\n"
+"    tcp_trace -l 8080      # trace LPORT 8080 only\n";
 
 static const struct argp_option opts[] = {
-	{ "timestamp", 't', NULL, 0, "Include timestamp on output" },
 	{ "pid", 'p', "PID", 0, "Trace this PID only" },
-	{ "lport", 'L', NULL, 0, "Include LPORT on output" },
-	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
+	{ "lport", 'l', "LPORT", 0, "Trace this LPORT only" },
 	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help" },
 	{},
 };
@@ -61,9 +56,14 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 			argp_usage(state);
 		}
 		break;
-		break;
-	case 'L':
-		env.lport = true;
+	case 'l':
+		errno = 0;
+		env.lport = strtoul(arg, NULL, 10);
+		if (errno) {
+			fprintf(stderr, "invalid lport: %s\n", arg);
+			argp_usage(state);
+		}
+		//env.lport = htons(env.lport);
 		break;
 	default:
 		return ARGP_ERR_UNKNOWN;
@@ -119,6 +119,7 @@ int app_run(void)
 	}
 
 	skel->rodata->targ_tgid = env.pid;
+	skel->rodata->targ_lport = env.lport;
 
 	/* Load & verify BPF programs */
 	int err = tcp_trace_bpf__load(skel);
