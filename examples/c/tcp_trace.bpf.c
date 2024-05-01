@@ -13,6 +13,7 @@
  char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
  const volatile pid_t targ_tgid = 0;
+ const volatile __u16 targ_lport = 0;
 
  struct tuple_key{
 	u32 saddr;
@@ -219,10 +220,8 @@ int BPF_PROG(tso_fragment, struct sock *sk, struct sk_buff *skb, unsigned int le
 	return 0;
 }
 
-SEC("fentry/ip_queue_xmit")
-int BPF_PROG(ip_queue_xmit, struct sock *sk, struct sk_buff *skb, struct flowi *fl)
+static int trace_tcp(const struct sock *sk, const struct sk_buff *skb, int rxtx)
 {
-
 	u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
     u16 lport = BPF_CORE_READ(sk, __sk_common.skc_num);
 	u16 dport = BPF_CORE_READ(sk, __sk_common.skc_dport);
@@ -236,7 +235,7 @@ int BPF_PROG(ip_queue_xmit, struct sock *sk, struct sk_buff *skb, struct flowi *
         return 0;
     }
 
-	if(lport != 8080)
+	if(lport != targ_lport && targ_lport)
 		return 0;
 
 	struct tuple_key key = {0};
@@ -267,73 +266,22 @@ int BPF_PROG(ip_queue_xmit, struct sock *sk, struct sk_buff *skb, struct flowi *
 	e->wmem = sk_wmem_queued;
 	e->true_size = true_size;
 	bpf_get_current_comm(&e->comm, sizeof(e->comm));
-	e->rxtx = 0;
+	e->rxtx = rxtx;
 	bpf_ringbuf_submit(e, 0);
-	if(lport == 8080)
-	{
-		bpf_printk("ip_queue_xmit skb->len: %u, wmem: %d, sndbuf: %d, skb_size: %u\n", 
-				skb_len, sk_wmem_queued, sk_sndbuf, sizeof(*skb));
-	}
 	return 0;
+}
+
+
+SEC("fentry/ip_queue_xmit")
+int BPF_PROG(ip_queue_xmit, struct sock *sk, struct sk_buff *skb, struct flowi *fl)
+{
+	return trace_tcp(sk, skb, 0);
 }
 
 SEC("fexit/tcp_ack")
 int BPF_PROG(tcp_ack, struct sock *sk, const struct sk_buff *skb, int flag)
 {
-	u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
-    u16 lport = BPF_CORE_READ(sk, __sk_common.skc_num);
-	u16 dport = BPF_CORE_READ(sk, __sk_common.skc_dport);
-	u32 daddr = BPF_CORE_READ(sk, __sk_common.skc_daddr);
-	u32 saddr = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
-	unsigned int skb_len = BPF_CORE_READ(skb, len);
-	int true_size = BPF_CORE_READ(skb, truesize);
-	int sk_wmem_queued = BPF_CORE_READ(sk, sk_wmem_queued);
-	int sk_sndbuf = BPF_CORE_READ(sk, sk_sndbuf);
-	if (family != AF_INET) {
-        return 0;
-    }
-
-	if(lport != 8080)
-		return 0;
-	
-
-	struct tuple_key key = {0};
-	key.daddr = daddr;
-	key.saddr = saddr;
-	key.dport = dport;
-	key.lport = lport;
-
-	/* if we recorded start of the process, calculate lifetime duration */
-	struct tuple_val *pval;
-	pval = bpf_map_lookup_elem(&start, &key);
-	if(!pval)
-		return 0;
-
-	struct event *e;
-	e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
-	if (!e)
-		return 0;
-
-	e->saddr = saddr;
-	e->daddr = daddr;
-	e->lport = lport;
-	e->dport = dport;
-	e->af = family;
-	e->size_goal = pval->size_goal;
-	e->mss = pval->mss;
-	e->skb_len = skb_len;
-	e->wmem = sk_wmem_queued;
-	e->true_size = true_size;
-	bpf_get_current_comm(&e->comm, sizeof(e->comm));
-	e->rxtx = 1;
-	bpf_ringbuf_submit(e, 0);
-	if(lport == 8080)
-	{
-		bpf_printk("tcp_ack skb->len: %u, wmem: %d, sndbuf: %d, skb_size: %u\n", 
-				skb_len, sk_wmem_queued, sk_sndbuf, sizeof(*skb));
-	}
-	return 0;
-	return 0;
+	return trace_tcp(sk, skb, 1);
 }
 
 
