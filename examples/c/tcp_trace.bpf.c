@@ -39,32 +39,7 @@ struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 256 * 1024);
 } rb SEC(".maps");
- 
-SEC("kprobe/tcp_sendmsg")
-int BPF_KPROBE(tcp_sendmsg, struct sock *sk, struct msghdr *msg, size_t size)
-{
-	u32 tgid = bpf_get_current_pid_tgid() >> 32;
-	char comm[TASK_COMM_LEN];
-	int ret = 0;
-	// // pull in details
-    u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
-    u16 lport = BPF_CORE_READ(sk, __sk_common.skc_num);
-	u16 dport = BPF_CORE_READ(sk, __sk_common.skc_dport);
-	int sk_wmem_queued = BPF_CORE_READ(sk, sk_wmem_queued);
 
-    if (family != AF_INET) {
-        return 0;
-    }
-	bpf_get_current_comm(&comm, sizeof(comm));
-	
-	if(lport == 8080)
-	{
-		bpf_printk("tcp send msg comm: %s, pid: %u, lport: %u, wmem: %d, send_size: %llu\n", 
-				comm, tgid, lport, sk_wmem_queued, size);
-	}
-
-	return 0;
-}
  
 SEC("fexit/tcp_send_mss")
 int BPF_PROG(tcp_send_mss, struct sock *sk, int *size_goal, int flags, int ret)
@@ -180,46 +155,6 @@ int BPF_PROG(__tcp_push_pending_frames, struct sock *sk, unsigned int cur_mss, i
 	return 0;
 }
 
-// SEC("fentry/tcp_mark_push")
-// int BPF_PROG(tcp_mark_push, struct tcp_sock *tp, struct sk_buff *skb)
-// {
-// 	// // pull in details
-//     char comm[TASK_COMM_LEN];
-// 	unsigned int len = BPF_CORE_READ(skb,len);
-// 	bpf_get_current_comm(&comm, sizeof(comm));
-
-// 	// if(comm[0] != 'p')
-// 	// {
-// 	// 	return 0;
-		
-// 	// }
-// 	bpf_printk("tcp_mark_push len: %u\n", 
-// 				len);
-// 	return 0;
-// }
-
-SEC("fentry/tso_fragment")
-int BPF_PROG(tso_fragment, struct sock *sk, struct sk_buff *skb, unsigned int len,
-			unsigned int mss_now, gfp_t gfp)
-{
-	u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
-    u16 lport = BPF_CORE_READ(sk, __sk_common.skc_num);
-	u16 dport = BPF_CORE_READ(sk, __sk_common.skc_dport);
-	unsigned int skb_len = BPF_CORE_READ(skb, len);
-	int sk_wmem_queued = BPF_CORE_READ(sk, sk_wmem_queued);
-	int sk_sndbuf = BPF_CORE_READ(sk, sk_sndbuf);
-	if (family != AF_INET) {
-        return 0;
-    }
-	
-	if(lport == 8080)
-	{
-		bpf_printk("tso_fragment skb->len: %u, wmem: %d, sndbuf: %d\n", 
-				skb_len, sk_wmem_queued, sk_sndbuf);
-	}
-	return 0;
-}
-
 static int trace_tcp(const struct sock *sk, const struct sk_buff *skb, int rxtx)
 {
 	u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
@@ -227,6 +162,7 @@ static int trace_tcp(const struct sock *sk, const struct sk_buff *skb, int rxtx)
 	u16 dport = BPF_CORE_READ(sk, __sk_common.skc_dport);
 	u32 daddr = BPF_CORE_READ(sk, __sk_common.skc_daddr);
 	u32 saddr = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
+	unsigned int skb_data_len = BPF_CORE_READ(skb, data_len);
 	unsigned int skb_len = BPF_CORE_READ(skb, len);
 	int true_size = BPF_CORE_READ(skb, truesize);
 	int sk_wmem_queued = BPF_CORE_READ(sk, sk_wmem_queued);
@@ -267,6 +203,7 @@ static int trace_tcp(const struct sock *sk, const struct sk_buff *skb, int rxtx)
 	e->true_size = true_size;
 	bpf_get_current_comm(&e->comm, sizeof(e->comm));
 	e->rxtx = rxtx;
+	e->skb_data_len = skb_data_len;
 	bpf_ringbuf_submit(e, 0);
 	return 0;
 }
@@ -306,6 +243,53 @@ int handle_tcp_probe(struct trace_event_raw_tcp_probe *ctx)
 	{
 		bpf_printk("handle_tcp_probe data_len: %u, snd_cwnd: %u, rcv_wnd: %u, snd_nxt: %u, snd_una: %u\n", 
 				data_len, snd_cwnd, rcv_wnd, snd_nxt, snd_una);
+	}
+	return 0;
+}
+
+SEC("tracepoint/sock/inet_sock_set_state")
+int handle_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
+{
+	struct sock *sk = (struct sock *)ctx->skaddr;
+	u16 family = BPF_CORE_READ(sk, __sk_common.skc_family);
+    u16 lport = BPF_CORE_READ(sk, __sk_common.skc_num);
+	u16 dport = BPF_CORE_READ(sk, __sk_common.skc_dport);
+	u32 daddr = BPF_CORE_READ(sk, __sk_common.skc_daddr);
+	u32 saddr = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
+	struct tuple_val *pval;
+	struct tuple_val val = {};
+
+	if (ctx->protocol != IPPROTO_TCP)
+		return 0;
+
+
+	if (family != AF_INET) {
+        return 0;
+    }
+
+	if(lport != targ_lport && targ_lport)
+		return 0;
+	
+	bpf_printk("handle_sock_set_state,state: %d, lport: %d, dport: %d, saddr: %u, daddr: %u\n", 
+				ctx->newstate, lport, dport, saddr, daddr);
+
+	struct tuple_key key = {0};
+	key.daddr = daddr;
+	key.saddr = saddr;
+	key.dport = dport;
+	key.lport = lport;
+
+	pval = bpf_map_lookup_elem(&start, &key);
+	if(!pval)
+	{
+		pval = &val;
+	}
+
+	if (ctx->newstate == TCP_CLOSE)
+		bpf_map_delete_elem(&start, &key);
+	else if(ctx->newstate == TCP_ESTABLISHED)
+	{
+		bpf_map_update_elem(&start, &key, pval, BPF_ANY);
 	}
 	return 0;
 }

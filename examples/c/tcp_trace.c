@@ -15,6 +15,7 @@ static struct env {
 } env;
 
 static volatile bool exiting = false;
+static bool verbose = false;
 
 static void sig_handler(int sig)
 {
@@ -48,6 +49,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	case 'h':
 		argp_state_help(state, stderr, ARGP_HELP_STD_HELP);
 		break;
+	case 'v':
+		verbose = true;
+		break;
 	case 'p':
 		errno = 0;
 		env.pid = strtol(arg, NULL, 10);
@@ -73,6 +77,8 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 
 static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
 {
+	if (level == LIBBPF_DEBUG && !verbose)
+		return 0;
 	return vfprintf(stderr, format, args);
 }
 
@@ -95,11 +101,11 @@ static int handle_event(void *ctx, void *data, size_t data_sz)
 		return -1;
 	}
 
-	printf("%-16s %-4s %-16s %-6u %-16s %-6u %-10d %-6d %-6u %-6u %-6u\n",
+	printf("%-16s %-4s %-16s %-6u %-16s %-6u %-10d %-6d %-10u %-6u %-8u %-10u\n",
 		e->comm, e->rxtx ? "RX" : "TX",
 		inet_ntop(e->af, &s, src, sizeof(src)), e->lport,
 		inet_ntop(e->af, &d, dst, sizeof(dst)),ntohs(e->dport),
-		e->size_goal, e->mss, e->skb_len, e->wmem, e->true_size);
+		e->size_goal, e->mss, e->skb_len, e->wmem, e->true_size, e->skb_data_len);
 
 	return 0;
 }
@@ -144,8 +150,8 @@ int app_run(void)
 	}
 
 	/* Process events */
-	printf("%-16s %-4s %-16s %-6s %-16s %-6s %-10s %-6s %-6s %-6s %-8s\n", 
-	"COMM", "RXTX", "SADDR", "LPORT", "DADDR", "DPORT", "SIZE_GOAL", "MSS", "LEN", "WMEM", "TRUESIZE");
+	printf("%-16s %-4s %-16s %-6s %-16s %-6s %-10s %-6s %-10s %-6s %-8s %-10s\n", 
+	"COMM", "RXTX", "SADDR", "LPORT", "DADDR", "DPORT", "SIZE_GOAL", "MSS", "LEN", "WMEM", "TRUESIZE", "DATA_LEN");
 	while (!exiting) {
 		err = ring_buffer__poll(rb, 100 /* timeout, ms */);
 		/* Ctrl-C will cause -EINTR */

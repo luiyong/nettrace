@@ -16,12 +16,12 @@ struct event {
 	int mss;
 	int true_size;
 	int rxtx;
+	__u32 skb_data_len;
 	__u32 skb_len;
 	__u32 saddr;
 	__u32 daddr;
 	__u16 lport;
 	__u16 dport;
-
 };
 
 
