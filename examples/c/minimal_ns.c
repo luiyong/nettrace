@@ -32,9 +32,9 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Failed to acquire namespace information");
 		return 1;
 	}
-	skel->bss->dev = sb.st_dev;
-	skel->bss->ino = sb.st_ino;
-	skel->bss->my_pid = getpid();
+	// skel->bss->dev = sb.st_dev;
+	// skel->bss->ino = sb.st_ino;
+	// skel->bss->my_pid = getpid();
 
 	/* Load & verify BPF programs */
 	err = minimal_ns_bpf__load(skel);
